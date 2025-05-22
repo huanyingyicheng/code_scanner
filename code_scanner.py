@@ -23,7 +23,7 @@ default_logger.addHandler(handler)
 
 
 class AsyncCodeAnalyzer:
-    """异步代码分析器（结合线程池与协程）[2,6](@ref)"""
+    """异步代码分析器（结合线程池与协程）"""
     def __init__(self, max_workers=10):
         self.executor = ThreadPoolExecutor(max_workers)
         self.ignore_dirs = {'__pycache__', '.git', 'venv'}
@@ -31,7 +31,7 @@ class AsyncCodeAnalyzer:
         self.logger = logging.getLogger(__name__).getChild('AsyncCodeAnalyzer')
 
     async def _parse_python_file(self, file_path: Path) -> List[Dict]:
-        """异步解析Python文件结构（含异常处理）[3](@ref)"""
+        """异步解析Python文件结构（含异常处理）"""
         try:
             async with aiofiles.open(file_path, 'r', encoding='utf-8') as f:
                 content = await f.read()
@@ -58,11 +58,13 @@ class AsyncCodeAnalyzer:
             return []
 
     async def _scan_directory(self, directory: Path) -> Generator[Dict, None, None]:
-        """增强型目录扫描（支持进度反馈）[5](@ref)"""
+        """增强型目录扫描（支持进度反馈）"""
         try:
             entries = await asyncio.to_thread(os.listdir, directory)
             for entry in sorted(entries, key=lambda x: x.lower()):
                 path = directory / entry
+                
+                # 只扫描当前目录下的子目录和文件
                 if path.is_dir() and entry not in self.ignore_dirs:
                     children = [child async for child in self._scan_directory(path)]
                     yield {
@@ -88,7 +90,7 @@ class AsyncCodeAnalyzer:
 
 
 class TreeViewApp(tk.Tk):
-    """现代化GUI界面（集成异步任务管理）[4,6](@ref)"""
+    """现代化GUI界面（集成异步任务管理）"""
     def __init__(self):
         super().__init__()
         self.title("智能代码分析器")
@@ -102,7 +104,7 @@ class TreeViewApp(tk.Tk):
         self.scan_start_time = 0  # 扫描开始时间
 
     def _create_ui_components(self):
-        """创建带输入输出组件的界面[1,5](@ref)"""
+        """创建带输入输出组件的界面"""
         # 配置样式
         style = ttk.Style()
         style.configure('Header.TLabel', font=('微软雅黑', 10, 'bold'))
@@ -282,7 +284,7 @@ class TreeViewApp(tk.Tk):
         }
 
     def _setup_async_loop(self):
-        """初始化异步事件循环线程[7](@ref)"""
+        """初始化异步事件循环线程"""
         self.loop = asyncio.new_event_loop()
         self.thread = threading.Thread(target=self._run_async_loop, daemon=True)
         self.thread.start()
@@ -296,12 +298,12 @@ class TreeViewApp(tk.Tk):
         )
 
     def _run_async_loop(self):
-        """运行异步事件循环[6](@ref)"""
+        """运行异步事件循环"""
         asyncio.set_event_loop(self.loop)
         self.loop.run_forever()
 
     def _browse_dir(self):
-        """目录选择对话框[5](@ref)"""
+        """目录选择对话框"""
         try:
             self.logger.info("正在打开目录选择对话框")
             initial_dir = self.path_entry.get() or os.path.expanduser("~")
@@ -319,7 +321,7 @@ class TreeViewApp(tk.Tk):
             messagebox.showerror("错误", f"浏览目录时发生错误: {str(e)}")
 
     def _start_async_scan(self):
-        """启动异步扫描任务[4](@ref)"""
+        """启动异步扫描任务"""
         try:
             self.logger.info("开始新扫描任务")
             path = self.path_entry.get().strip()
@@ -354,7 +356,7 @@ class TreeViewApp(tk.Tk):
             messagebox.showerror("错误", f"启动扫描任务时发生错误: {str(e)}")
 
     async def _perform_scan(self, path: Path):
-        """执行扫描任务并更新进度[2](@ref)"""
+        """执行扫描任务并更新进度"""
         try:
             self.logger.debug(f"开始扫描目录: {path}")
             root_node = self.tree.insert('', 'end', text=path.name, values=('directory', str(path), ''))
@@ -473,7 +475,7 @@ class TreeViewApp(tk.Tk):
             messagebox.showerror("错误", f"插入节点时发生错误: {str(e)}")
 
     def _scan_complete_callback(self, future, path):
-        """扫描完成回调[4](@ref)"""
+        """扫描完成回调"""
         try:
             scanned_files = future.result()
             elapsed_time = time.time() - self.scan_start_time
@@ -864,14 +866,48 @@ class TreeViewApp(tk.Tk):
         }
         
         children = []
+        # 收集并处理子节点
+        child_nodes = []
         for child in self.tree.get_children(item):
             values = self.tree.item(child, 'values')
             node_type, path, doc = values
             
             # 只包含目录、文件和类方法节点
             if node_type in ['directory', 'file', 'class', 'method']:
-                children.append(self._build_simplified_json_structure(child))
+                child_nodes.append((child, node_type, path, doc))
+        
+        # 先处理非类节点的子节点
+        for child, node_type, path, doc in child_nodes:
+            if node_type != 'class':
+                child_data = self._build_simplified_json_structure(child)
+                
+                # 添加注释信息（如果是类或方法）
+                if node_type in ['class', 'method'] and doc:
+                    child_data["doc"] = doc
+                
+                children.append(child_data)
             
+        # 最后处理类节点，确保包含所有方法
+        for child, node_type, path, doc in child_nodes:
+            if node_type == 'class':
+                # 处理类节点本身
+                child_data = self._build_simplified_json_structure(child)
+                if doc:
+                    child_data["doc"] = doc
+                
+                children.append(child_data)
+                
+                # 收集所有方法子节点
+                method_children = []
+                for grandchild in self.tree.get_children(child):
+                    grandchild_values = self.tree.item(grandchild, 'values')
+                    grandchild_type = grandchild_values[0]
+                    if grandchild_type == 'method':
+                        method_children.append(self._build_simplified_json_structure(grandchild))
+                
+                if method_children:
+                    children.extend(method_children)
+        
         if children:
             result["children"] = children
             
@@ -915,7 +951,36 @@ class TreeViewApp(tk.Tk):
                     except:
                         pass
                 
-                result += "\n"
+                # 添加注释（如果是类或方法）
+                if node_type in ['class', 'method']:
+                    if doc:
+                        # 处理多行注释，自动换行并缩进
+                        lines = doc.split('\n')
+                        first_line = lines[0].strip()
+                        result += f"  # {first_line}\n"
+                        
+                        if len(lines) > 1:
+                            for line in lines[1:]:
+                                result += f"{current_prefix}    {line.strip()}\n"
+                        
+                # 对于类节点，确保显示所有方法
+                if node_type == 'class':
+                    # 强制展开类的方法列表
+                    method_children = []
+                    for grandchild in self.tree.get_children(child):
+                        if self.tree.item(grandchild, 'values')[0] == 'method':
+                            method_children.append(grandchild)
+                    
+                    # 显示方法数量
+                    if method_children:
+                        result += f" ({len(method_children)} methods)\n"
+                        # 递归显示所有方法
+                        for grandchild in method_children:
+                            result += self._build_simplified_tree_text(grandchild, level + 1, is_last_child, current_prefix)
+                    else:
+                        result += "\n"
+                else:
+                    result += "\n"
                 
                 # 递归处理子节点
                 new_line_prefix = ("    " if is_last_child else "│   ")
